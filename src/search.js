@@ -2,23 +2,9 @@ import './styles/main.css'
 import FilmotekaInfo from './filmoteka';
 
 let currentPage = 1;
-const moviesPerPage = 18;
-let totalMovies = 0
-
-document.addEventListener('DOMContentLoaded', function () {
-    const searchForm = document.getElementById('searchForm');
-    searchForm.addEventListener('submit', function (event) {
-        event.preventDefault()
-        const searchInput = document.getElementById('searchInput').value;
-        const filmContainer = document.querySelector('.row.second')
-        while (filmContainer.firstChild) {
-            filmContainer.removeChild(filmContainer.firstChild);
-        }
-        searchMovies(searchInput, filmContainer, currentPage)
-    });
-
-    addPagination('', filmContainer, 0, currentPage)
-});
+let totalPages = 0;
+let isFetching = false;
+let currentQuery = ''; // Сохраняем текущий запрос, чтобы скролл знал, что грузить дальше
 
 const options = {
     method: 'GET',
@@ -28,175 +14,144 @@ const options = {
     }
 };
 
-function addPagination(searchInput, filmContainer, totalPages, currentPage) {
-    const existingPagination = document.getElementById('pagination');
-    if (existingPagination) {
-        existingPagination.parentNode.removeChild(existingPagination);
+document.addEventListener('DOMContentLoaded', function () {
+    const searchForm = document.getElementById('searchForm');
+    const filmContainer = document.querySelector('.movies-grid'); // Используем новый чистый селектор
+
+    // 1. Создаем триггер-невидимку для Observer'а
+    const observerTarget = document.createElement('div');
+    observerTarget.className = 'scroll-trigger';
+    observerTarget.style.height = '10px';
+    
+    if (filmContainer) {
+        filmContainer.insertAdjacentElement('afterend', observerTarget);
     }
 
-    const paginationContainer = document.createElement('nav');
-    paginationContainer.setAttribute('aria-label', 'Page navigation');
-    paginationContainer.id = 'pagination';
-    paginationContainer.classList.add('d-flex', 'justify-content-center');
-
-    const paginationList = document.createElement('div');
-    paginationList.classList.add('btn-group');
-
-    const previousLink = document.createElement('button');
-    previousLink.classList.add('btn', 'btn-primary');
-    previousLink.textContent = 'Previous';
-
-    previousLink.addEventListener('click', (event) => {
-        event.preventDefault();
-        if (currentPage > 1) {
-            currentPage--;
-            searchMovies(searchInput, filmContainer, currentPage, options);
-            searchForm.dispatchEvent(new Event('submit'))
-        }
-    });
-
-    paginationList.appendChild(previousLink);
-
-    const startPage = Math.max(1, currentPage - 2);
-    const endPage = Math.min(totalPages, startPage + 4);
-
-    for (let i = startPage; i <= endPage; i++) {
-        const pageLink = document.createElement('button');
-        pageLink.classList.add('btn', i === currentPage ? 'btn-primary' : 'btn-secondary');
-        pageLink.textContent = i;
-
-        pageLink.addEventListener('click', (event) => {
-            event.preventDefault();
-            currentPage = i;
-            searchMovies(searchInput, filmContainer, currentPage, options);
-            scrollToTop()
-        });
-        paginationList.appendChild(pageLink);
-    }
-
-    const nextLink = document.createElement('button');
-    nextLink.classList.add('btn', 'btn-primary');
-    nextLink.textContent = 'Next';
-
-    nextLink.addEventListener('click', (event) => {
-        event.preventDefault();
-        if (currentPage < totalPages) {
+    // 2. Настраиваем Intersection Observer
+    const observer = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting && !isFetching && currentPage < totalPages) {
             currentPage++;
-            searchMovies(searchInput, filmContainer, currentPage, options);
-            scrollToTop()
+            searchMovies(currentQuery, filmContainer, currentPage);
         }
+    }, {
+        rootMargin: '300px' // Начинаем грузить чуть раньше, чем пользователь дойдет до низа
     });
 
-    paginationList.appendChild(nextLink);
+    if (observerTarget) {
+        observer.observe(observerTarget);
+    }
 
-    paginationContainer.appendChild(paginationList);
+    // 3. Логика формы поиска
+    if (searchForm) {
+        searchForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            const searchInput = document.getElementById('searchInput').value.trim();
+            
+            if (searchInput && filmContainer) {
+                currentQuery = searchInput; // Запоминаем, что ищем
+                currentPage = 1; // Сбрасываем страницу на первую
+                searchMovies(currentQuery, filmContainer, currentPage);
+            }
+        });
+    }
+});
 
-    const filmContainer_ = document.getElementsByClassName('row second')[0];
-    filmContainer_.insertAdjacentElement('afterend', paginationContainer);
-    console.log("Current page:", currentPage);
-    console.log("Search input:", searchInput);
-}
-
-
-function searchMovies(searchInput, filmContainer, currentPage) {
-    fetch(`https://api.themoviedb.org/3/search/movie?query=${searchInput}&include_adult=false&language=en-US&page=${currentPage}`, options)
+function searchMovies(searchInput, filmContainer, page) {
+    if (!searchInput) return;
+    
+    isFetching = true;
+    
+    fetch(`https://api.themoviedb.org/3/search/movie?query=${searchInput}&include_adult=false&language=en-US&page=${page}`, options)
         .then(response => response.json())
         .then(response => {
             const films = response.results;
+            totalPages = response.total_pages;
 
-            filmContainer.innerHTML = '';
+            // Если это новый поиск (первая страница), очищаем старую выдачу и скроллим вверх
+            if (page === 1) {
+                filmContainer.innerHTML = '';
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
                 
             films.forEach(film => {
-                new SearchFilmoteka(film, filmContainer)
-            })
-            totalMovies = response.total_pages
-            addPagination(searchInput, filmContainer, totalMovies, currentPage)
-            scrollToTop()
-            console.log(currentPage)
+                new SearchFilmoteka(film, filmContainer);
+            });
+            
+            isFetching = false;
         })
-        .catch(err => console.error(err));
-}
-
-function scrollToTop() {
-    window.scrollTo({
-        top: 0,
-        behavior: 'smooth'
-    });
+        .catch(err => {
+            console.error(err);
+            isFetching = false;
+        });
 }
 
 class SearchFilmoteka {
     constructor(film, filmContainer) {
-        this.container = filmContainer
-        this.created(film)
+        this.container = filmContainer;
+        this.created(film);
     }
 
     created(film) {
-        this.column = document.createElement('div')
-        this.column.className = 'col-sm-4'
-        this.container.appendChild(this.column)
+        const movieCard = document.createElement('div');
+        movieCard.className = 'movie-card';
+        this.container.appendChild(movieCard);
 
-        this.mainDiv = document.createElement('div')
-        this.mainDiv.className = 'card'
-        this.column.appendChild(this.mainDiv)
+        const posterBox = document.createElement('div');
+        posterBox.className = 'poster-box';
+        movieCard.appendChild(posterBox);
 
-        this.contentImage = document.createElement('img')
-        console.log(options.title)
+        const ratingBadge = document.createElement('div');
+        ratingBadge.className = 'rating-badge';
+        const rating = film.vote_average ? film.vote_average.toFixed(1) : 'NR';
+        ratingBadge.innerHTML = `<span>★</span> ${rating}`;
+        posterBox.appendChild(ratingBadge);
+
+        const contentImage = document.createElement('img');
         if (film.poster_path) {
-            this.contentImage.src = `https://image.tmdb.org/t/p/w500${film.poster_path}`;
+            contentImage.src = `https://image.tmdb.org/t/p/w500${film.poster_path}`;
         } else {
-            this.contentImage.src = 'https://upload.wikimedia.org/wikipedia/commons/a/ac/No_image_available.svg'
+            contentImage.src = 'https://upload.wikimedia.org/wikipedia/commons/a/ac/No_image_available.svg';
         }
-        this.contentImage.className = "card-img-top"
-        this.contentImage.alt = "No Image"
-        this.mainDiv.appendChild(this.contentImage)
+        contentImage.alt = film.title || film.name || 'No Image';
+        posterBox.appendChild(contentImage);
 
-        this.secondDiv = document.createElement('div')
-        this.secondDiv.className = 'card-body'
-        this.mainDiv.appendChild(this.secondDiv)
+        const movieDetails = document.createElement('div');
+        movieDetails.className = 'movie-details';
+        movieCard.appendChild(movieDetails);
 
-        this.title = document.createElement('h5')
-        this.title.className = 'card-title'
-        this.title.textContent = film.title || film.name
-        this.secondDiv.appendChild(this.title)
+        const title = document.createElement('div');
+        title.className = 'movie-title';
+        title.textContent = film.title || film.name;
+        movieDetails.appendChild(title);
 
-        this.genres = film.genre_ids.map(genreId => getGenreName(genreId)).join(', ');
-        this.releaseYear = film.release_date ? new Date(film.release_date).getFullYear() : '';
-        this.airReleaseYear = film.first_air_date ? new Date(film.first_air_date).getFullYear() : '';
-        this.a = document.createElement('a')
-        this.a.className = 'card-link'
-        this.a.href = ''
-        this.a.textContent = `${this.genres} | ${this.releaseYear || this.airReleaseYear}`
-        this.secondDiv.appendChild(this.a)
-        this.a.addEventListener('click', (event) => {
+        const releaseYear = film.release_date ? new Date(film.release_date).getFullYear() : (film.first_air_date ? new Date(film.first_air_date).getFullYear() : 'N/A');
+        const genres = film.genre_ids ? film.genre_ids.map(genreId => getGenreName(genreId)).join(', ') : 'Unknown';
+
+        const meta = document.createElement('div');
+        meta.className = 'movie-meta';
+        meta.textContent = `${releaseYear} • ${genres}`;
+        movieDetails.appendChild(meta);
+
+        const btn = document.createElement('button');
+        btn.className = 'btn-apple';
+        btn.textContent = 'View Details';
+        movieDetails.appendChild(btn);
+
+        btn.addEventListener('click', (event) => {
             event.preventDefault();
-            const createModal = new FilmotekaInfo(this.filmidss_)
-            createModal.loadData(this.filmidss_)
+            const createModal = new FilmotekaInfo();
+            createModal.loadData(film.id);
         });
 
         function getGenreName(genreId) {
             const genreMapping = {
-                12: "Adventure",
-                14: "Fantasy",
-                16: "Animation",
-                18: "Drama",
-                27: "Horror",
-                28: "Action",
-                35: "Comedy",
-                36: "History",
-                37: "Western",
-                53: "Thriller",
-                80: "Crime",
-                99: "Documentary",
-                878: "Science Fiction",
-                9648: "Mystery",
-                10402: "Music",
-                10749: "Romance",
-                10751: "Family",
-                10752: "War",
-                10770: "TV Movie"
+                12: "Adventure", 14: "Fantasy", 16: "Animation", 18: "Drama",
+                27: "Horror", 28: "Action", 35: "Comedy", 36: "History",
+                37: "Western", 53: "Thriller", 80: "Crime", 99: "Documentary",
+                878: "Science Fiction", 9648: "Mystery", 10402: "Music",
+                10749: "Romance", 10751: "Family", 10752: "War", 10770: "TV Movie"
             };
-
-            return genreMapping[genreId] || 'Unknown Genre';
+            return genreMapping[genreId] || 'Unknown';
         }
     }
 }

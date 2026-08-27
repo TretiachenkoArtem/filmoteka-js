@@ -1,138 +1,169 @@
-import './styles/main.css'
+import './styles/main.css';
 import FilmotekaInfo from './filmoteka';
+import { supabase } from './supabaseClient.js';
+import { initAuth } from './auth.js';
+import './ui.js';
 
 class FilmotekaQueue {
     constructor(container) {
-        this.container = container
+        this.container = container;
         this.watchedBtn = document.getElementById('watchedBtn');
         this.queueBtn = document.getElementById('queueBtn');
-        this.addedMovies = {}
-
-        // localStorage.setItem('addedFilm', JSON.stringify(filmInfo));
-        // window.addEventListener('storage', function (event) {
-        //     if (event.key === 'addedFilm') {
-        //         const addedFilm = JSON.parse(event.newValue);
-        //         // Здесь вы можете обновить данные в соответствии с добавленным фильмом
-        //     }
-        // });
-
+        this.currentFetchId = 0;
 
         this.initializeLibrary();
-
-        this.renderWatchedMovies()
+        this.renderCurrentTab();
     }
 
     initializeLibrary() {
-        this.watchedBtn.addEventListener('click', () => {
-            this.renderWatchedMovies();
-        });
+        if (this.watchedBtn) {
+            this.watchedBtn.addEventListener('click', () => {
+                if (this.watchedBtn.classList.contains('active')) return;
+                this.setActiveTab(this.watchedBtn, this.queueBtn);
+                this.renderCurrentTab();
+            });
+        }
 
-        this.queueBtn.addEventListener('click', () => {
-            this.renderQueueMovies();
-        });
+        if (this.queueBtn) {
+            this.queueBtn.addEventListener('click', () => {
+                if (this.queueBtn.classList.contains('active')) return;
+                this.setActiveTab(this.queueBtn, this.watchedBtn);
+                this.renderCurrentTab();
+            });
+        }
+
+        let timeout;
+        const safeRender = () => {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => this.renderCurrentTab(), 100);
+        };
+
+        window.addEventListener('libraryUpdated', safeRender);
+        window.addEventListener('userStateChanged', safeRender);
     }
 
-    renderQueueMovies() {
-        this.clearContainer()
-        const queueMovies = this.getQueueMovies();
-        queueMovies.forEach(movie => {
-            if (!this.addedMovies[movie.id]) {
-                this.addFilm(movie);
-                this.addedMovies[movie.id] = true;
-            }
-        });
+    setActiveTab(activeBtn, inactiveBtn) {
+        activeBtn.classList.add('active');
+        inactiveBtn.classList.remove('active');
     }
 
-    renderWatchedMovies() {
-        this.clearContainer()
-        const watchedMovies = this.getWatchedMovies();
-        watchedMovies.forEach(movie => {
-            if (!this.addedMovies[movie.id]) {
-                this.addFilm(movie);
-                this.addedMovies[movie.id] = true;
-            }
-        });
-
+    renderCurrentTab() {
+        const listType = (this.watchedBtn && this.watchedBtn.classList.contains('active')) ? 'watched' : 'queue';
+        this.loadAndRenderMovies(listType);
     }
 
-    clearContainer() {
+    async loadAndRenderMovies(listType) {
+        const fetchId = ++this.currentFetchId;
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (fetchId !== this.currentFetchId) return;
         this.container.innerHTML = '';
-        this.addedMovies = {};
-    }
 
-    getWatchedMovies() {
-        return JSON.parse(localStorage.getItem('watched')) || [];
-    }
+        if (!user) {
+            this.container.innerHTML = `
+                <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+                    <p style="font-size: 1.1rem;">Please Sign In to view your library.</p>
+                </div>
+            `;
+            return;
+        }
 
-    getQueueMovies() {
-        return JSON.parse(localStorage.getItem('queue')) || [];
+        const { data: movies, error } = await supabase
+            .from('favorites')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('list_type', listType)
+            .order('id', { ascending: false });
+
+        if (fetchId !== this.currentFetchId) return;
+
+        if (error) {
+            console.error('Error fetching library:', error);
+            this.container.innerHTML = `<p style="grid-column: 1 / -1; text-align: center; color: var(--text-secondary);">Failed to load library.</p>`;
+            return;
+        }
+
+        if (!movies || movies.length === 0) {
+            this.container.innerHTML = `
+                <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+                    <p style="font-size: 1.1rem;">No movies in your ${listType} list yet.</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Фильтрация дубликатов
+        const seen = new Set();
+        const uniqueMovies = movies.filter(movie => {
+            const duplicate = seen.has(movie.movie_id);
+            seen.add(movie.movie_id);
+            return !duplicate;
+        });
+
+        this.container.innerHTML = '';
+        uniqueMovies.forEach(movie => this.addFilm(movie));
     }
 
     addFilm(movie) {
+        const movieCard = document.createElement('div');
+        movieCard.className = 'movie-card';
 
-        this.column = document.createElement('div');
-        this.column.className = 'col-sm-4';
-        this.container.appendChild(this.column);
+        const posterBox = document.createElement('div');
+        posterBox.className = 'poster-box';
 
-        this.mainDiv = document.createElement('div');
-        this.mainDiv.className = 'card';
-        this.column.appendChild(this.mainDiv);
+        const contentImage = document.createElement('img');
+        contentImage.src = movie.poster_path 
+            ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` 
+            : 'https://upload.wikimedia.org/wikipedia/commons/a/ac/No_image_available.svg';
+        contentImage.alt = movie.movie_title || movie.title || 'No Image';
+        posterBox.appendChild(contentImage);
 
-        this.contentImage = document.createElement('img');
-        this.contentImage.src = `https://image.tmdb.org/t/p/w500${movie.img}`;
-        this.contentImage.className = "card-img-top";
-        this.contentImage.alt = "...";
-        this.mainDiv.appendChild(this.contentImage);
+        if (movie.vote_average) {
+            const ratingBadge = document.createElement('div');
+            ratingBadge.className = 'rating-badge';
+            ratingBadge.innerHTML = `<span>★</span> ${Number(movie.vote_average).toFixed(1)}`;
+            posterBox.appendChild(ratingBadge);
+        }
 
-        this.secondDiv = document.createElement('div');
-        this.secondDiv.className = 'card-body';
-        this.mainDiv.appendChild(this.secondDiv);
+        const movieDetails = document.createElement('div');
+        movieDetails.className = 'movie-details';
 
-        this.title = document.createElement('h5');
-        this.title.className = 'card-title';
-        this.title.textContent = movie.title;
-        this.secondDiv.appendChild(this.title);
+        const title = document.createElement('h5');
+        title.className = 'movie-title';
+        title.textContent = movie.movie_title || movie.title || 'Untitled';
 
-        this.releaseYear = movie.release ? new Date(movie.release).getFullYear() : '';
+        const releaseYear = movie.release_date ? new Date(movie.release_date).getFullYear() : 'N/A';
 
-        this.ad = document.createElement('button');
-        this.ad.className = 'btn btn-link';
-        this.ad.type = 'button';
-        const genreIds = movie.ganre__.map(genre => genre.name)
-        this.ad.textContent = `${genreIds.join(', ')} | ${this.releaseYear}`;
-        this.secondDiv.appendChild(this.ad);
-        this.ad.addEventListener('click', (event) => {
+        const meta = document.createElement('div');
+        meta.className = 'movie-meta';
+        meta.textContent = `${releaseYear}`;
+
+        const btn = document.createElement('button');
+        btn.className = 'btn-apple';
+        btn.textContent = 'View Details';
+
+        btn.addEventListener('click', (event) => {
             event.preventDefault();
-            this.filmidss_ = movie.id
-            const createModal = new FilmotekaInfo(this.filmidss_);
-            createModal.loadData(this.filmidss_);
+            const createModal = new FilmotekaInfo();
+            createModal.loadData(movie.movie_id);
         });
+
+        movieDetails.appendChild(title);
+        movieDetails.appendChild(meta);
+        movieDetails.appendChild(btn);
+
+        movieCard.appendChild(posterBox);
+        movieCard.appendChild(movieDetails);
+
+        this.container.appendChild(movieCard);
     }
 }
 
 document.addEventListener('DOMContentLoaded', function () {
-    const watchedBtn = document.getElementById('watchedBtn');
-    const queueBtn = document.getElementById('queueBtn');
-    watchedBtn.classList.add('active')
+    initAuth();
 
-    watchedBtn.addEventListener('click', function () {
-        if (queueBtn.classList.contains('active')) {
-            queueBtn.classList.remove('active');
-        } else {
-            watchedBtn.classList.add('active');
-        }
-    });
-
-    queueBtn.addEventListener('click', function () {
-        if (watchedBtn.classList.contains('active')) {
-            watchedBtn.classList.remove('active');
-        } else {
-            queueBtn.classList.add('active');
-        }
-    });
-});
-
-document.addEventListener('DOMContentLoaded', function () {
-    const container = document.getElementById('filmContainer')
-    const filmotekaQueue = new FilmotekaQueue(container)
+    const container = document.getElementById('filmContainer');
+    if (container) {
+        new FilmotekaQueue(container);
+    }
 });
